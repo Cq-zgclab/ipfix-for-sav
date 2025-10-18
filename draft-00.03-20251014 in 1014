@@ -1,0 +1,496 @@
+---
+title: Export of Source Address Validation (SAV) Information in IPFIX
+abbrev: SAV IPFIX
+docname: draft-opsawg-ipfix-sav-00
+obsoletes:
+updates:
+date:
+category: std
+submissionType: IETF
+
+ipr: trust200902
+area: Operations and Management
+workgroup: opsawg
+keyword: IPFIX, Source Address Validation (SAV)
+
+author:
+ -
+  ins: Q. Cao
+  name: Qian Cao
+  organization: Zhongguancun Laboratory
+  email: caoqian@zgclab.edu.cn
+  city: Beijing
+  country: China
+ -
+  ins: M. Huang
+  name: Mingqing Huang
+  organization: Zhongguancun Laboratory
+  email: huangmq@mail.zgclab.edu.cn
+  city: Beijing
+  country: China
+ -
+  ins: B. Claise
+  name: Benoit Claise
+  organization: Huawei
+  email: benoit.claise@huawei.com
+ -
+  ins: T. Zhou
+  name: Tianran Zhou
+  organization: Huawei
+  email: zhoutianran@huawei.com
+  city: Beijing
+  country: China  
+
+normative:
+  I-D.ietf-savnet-general-sav-capabilities:
+  I-D.li-savnet-sav-yang:
+  RFC8174:
+  RFC2119:
+  RFC7011:
+  RFC7012:
+  RFC7013:
+  RFC6313:
+  RFC8126:
+informative:
+  I-D.ietf-savnet-inter-domain-problem-statement:
+  IANA-IPFIX:
+    title: IP Flow Information Export (IPFIX) Entities
+    author:
+    org: IANA
+    date:
+    target: https://www.iana.org/assignments/ipfix/ipfix.xhtml
+  
+...
+--- abstract
+
+This document specifies the IP Flow Information Export (IPFIX) Information Elements (IEs) to export the context and outcome of Source Address Validation (SAV) enforcement data. These SAV-specific Information Elements provide detailed insight into why packets are identified as spoofed by capturing the specific SAV rules that triggered validation decisions. This operational visibility is essential for network operators to verify SAV effectiveness, audit rule correctness, and analyze source address spoofing events.
+--- middle
+
+# Introduction {#sec-intro}
+
+Source Address Validation (SAV) serves as a fundamental defense mechanism against IP source address spoofing. Despite its critical role in network security, current SAV implementations lack operational visibility, making it difficult to answer essential operational questions:
+
+* How many packets are identified as spoofed and dropped by SAV?
+* Which interfaces receive spoofed packets and which source prefixes are targeted?
+* Which specific SAV rules trigger the enforcement actions?
+* Are SAV rules functioning as intended or potentially misconfigured?
+
+This document introduces a set of SAV-specific IP Flow Information Export (IPFIX) Information Elements that enable detailed reporting of Source Address Validation enforcement actions. These elements align with the SAV concepts and operational models defined in [I-D.ietf-savnet-general-sav-capabilities], and provide traffic observations that can be operationally correlated with the SAV configuration and state information available via the YANG data model [I-D.li-savnet-sav-yang].
+
+# Terminology
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all capitals, as shown here.
+
+This document makes use of the terms defined in [RFC7011], and [I-D.ietf-savnet-general-sav-capabilities].
+
+The following terms are used as defined in [RFC7011]:
+
+* IPFIX
+* IPFIX Information Elements
+* Template
+* Template Record
+* Data Record
+* Data Set
+* Exporter
+* Collector
+
+The following terms are used as defined in [I-D.ietf-savnet-general-sav-capabilities]
+
+* SAV rule
+* Validation mode
+
+# SAV Overview and IPFIX Export Requirements {#sec-sav-overview}
+
+This section outlines the operational requirements for SAV telemetry export using IPFIX, based on the generalized SAV architectural framework defined in [I-D.ietf-savnet-general-sav-capabilities].
+
+The SAV framework establishes four canonical validation modes that model validation policies:
+
+* **Interface-based prefix allowlist (Mode 1):** Validates that a source prefix is explicitly permitted on the incoming interface.
+
+* **Interface-based prefix blocklist (Mode 2):** Validates that a source prefix is not explicitly blocked on the incoming interface.
+
+* **Prefix-based interface allowlist (Mode 3):** Validates that a packet is received on an interface explicitly permitted for its source prefix.
+
+* **Prefix-based interface blocklist (Mode 4):** Validates that a packet is not received on an interface explicitly blocked for its source prefix.
+
+These modes can be applied independently or in combination on a router, following a defined validation procedure (Section 2 of [I-D.ietf-savnet-general-sav-capabilities]). Furthermore, when identifying a packet as spoofed, a range of traffic handling policies (e.g. discard, rate-limit, redirect) can be applied.
+
+However, the generalized SAV model requires corresponding operational visibility capabilities. Without integrated telemetry, operators face significant challenges in:
+
+* Operational Verification: Confirming SAV is actively and correctly enforcing policies
+* Root-Cause Analysis: Determining why specific packets were deemed invalid
+* Threat Intelligence: Quantifying spoofing attempts and analyzing attack patterns
+
+To address these limitations, IP Flow Information Export (IPFIX) [RFC7011] and [RFC7012] provides a vendor-neutral protocol for SAV telemetry. The exported data must provide insight into:
+
+* The validation outcome and specific reason for the decision
+* The identity and type of SAV rule or rule set that influenced the decision  
+* The configured rule content that was evaluated during validation
+* The enforcement action applied to spoofed packets
+
+The following section defines the IPFIX Information Elements that meet these requirements.
+
+# IPFIX SAV Information Elements {#sec-IEs}
+
+This section defines the Information Elements used for SAV telemetry. These Information Elements have been specified in accordance with the guidelines in [RFC7013].
+
+## Design Rationale
+
+The SAV IPFIX Information Elements are designed to provide detailed visibility into Source Address Validation enforcement actions, enabling network operators and automation systems to monitor and troubleshoot SAV operations effectively. The design follows these principles:
+
+* **Scope**. The SAV-specific Information Elements are used to report the outcome and context of Source Address Validation processing for data plane traffic observations. Interface, device or network-level SAV configuration is out of scope for these IEs and is covered by the SAVNET YANG data model.
+* **Conceptual Alignment**. The elements align with the validation modes and rule types defined in [I-D.ietf-savnet-general-sav-capabilities], ensuring consistency with the architectural SAV concepts.
+* **Semantic Correlation**. The IPFIX encoding preserves the semantic relationships defined in [I-D.li-savnet-sav-yang], which enables correlation between IPFIX records in data-plane and YANG configuration/state data in control-plane comprehensive analysis.
+* **Structured Encoding**. The `savMatchedContentList` is encoded as a `subTemplateList` to represent the multi-field tuples of SAV rules. The structure of `subTemplateList` was chosen because it can encapsulate heterogeneous fields (e.g., prefix, length, interface) within a single list element. The list semantics (`allOf`, `exactlyOneOf`) directly encode the SAV validation logic (e.g., matching all rules in an allowlist vs. exactly one in a blocklist) into the data structure.
+
+## savRuleType (unsigned8) {#subsec-IEs-savRuleType}
+
+The `savRuleType` element classifies the rule as either an allowlist or a blocklist. The values correspond to the check type concepts in the SAV architecture:
+
+* A value of `0` (allowlist) indicates the packet was validated against an allowlist.
+* A value of `1` (blocklist) indicates the packet was validated against a blocklist.
+
+## savTargetType  (unsigned8)  {#subsec-IEs-savTargetType}
+
+The `savTargetType` element specifies the lookup key used by the SAV rule. It MAY be used in conjunction with `savRuleType` to fully define the validation mode applied.
+
+* A value of `0` (interface-based) indicates the rule is indexed by an interface (e.g., "on interface X, what prefixes are allowed/blocked?").
+* A value of `1` (prefix-based) indicates the rule is indexed by a source prefix (e.g., "for prefix Y, which interfaces are allowed/blocked?").
+
+## savMatchedContentList (subTemplateList) {#subsec-IEs-savMatchedContentList}
+
+The `savMatchedContentList` element carries the content of the rules that were relevant to the validation decision, encoded as a `subTemplateList` according to [RFC6313]. Each element in the list represents a complete SAV rule tuple. The content and semantics of the list are defined by the `savRuleType`:
+
+* **For Allowlist non-matches (`savRuleType=0`)**: The `savMatchedContentList` consists of the set of all rule tuples from the consulted SAV allowlist at the time of the packet's processing. The subTemplateList semantic SHOULD be `allOf` (0x03), indicating that the packet was validated against all these rules and did not match any of them.
+* **For Blocklist matches (`savRuleType=1`)**: The `savMatchedContentList` contains the first rule tuple that matched the packet from the SAV blocklist. The subTemplateList semantic SHOULD be `exactlyOneOf` (0x01), indicating that the packet matched this specific rule.
+
+**Semantic Interpretation of Standard Information Elements:**
+When standard IPFIX Information Elements (such as `ingressInterface`, `sourceIPv4Prefix`,`sourceIPv4PrefixLength` or their IPv6 equivalents) are used within the subTemplateList of `savMatchedContentList`, they represent values from the SAV rule configuration, rather than from the actual packet being validated. This contextual distinction is critical for correct interpretation:
+
+* **In the parent Data Record**: These IEs describe attributes of the actual spoofed packets that were validated by SAV.
+* **Within `savMatchedContentList`**: These same IEs describe the configured SAV rule parameters that were evaluated during validation.
+
+This approach ensures clear semantic distinction by reusing existing IEs, without requiring definition of new elements for SAV rule parameters.
+
+## savPolicyAction (unsigned8) {#subsec-IEs-savPolicyAction}
+
+The `savPolicyAction` indicates the action applied to packets identified as spoofed. The action taken is a matter of local policy. This element reports the outcome.
+
+# Use Cases
+
+The SAV-specific IPFIX Information Elements defined in this document enable network operators to answer critical operational questions that are currently unaddressable without telemetry for SAV:
+
+**SAV Effectiveness Monitoring:** Use `savRuleType` (TBD1), `savTargetType` (TBD2), `savPolicyAction` (TBD4)  and standard IPFIX counters, to quantify spoofing attempt volumes, analyze their distribution across different validation modes, and identify applied enforcement actions (discard, rate-limit, redirect) to spoofed traffic.
+
+**Rule-Level Attribution and Troubleshooting:** Use`savMatchedContentList` (TBD3)  to determine the specific SAV rule configuration that triggered enforcement decisions , including the exact rule parameters (interfaces, prefixes) evaluated during validation, whether for allowlist failures or blocklist matches.
+
+**Forensic Analysis and Compliance:** Correlate SAV Data Records with packet-level details using `selectionSequenceId` for incident investigation and gather evidence to support external trust initiatives and regulatory compliance reporting.
+
+# Operational Considerations
+
+While this document defines new IPFIX Information Elements using standard IPFIX mechanisms, implementors should consider:
+
+* **Exporter Implementation:** Exporters MUST properly encode the `subTemplateList` structure for `savMatchedContentList` and ensure semantic consistency between `savRuleType` and list contents. Exporters MUST also define the sub-templates (e.g., 901-904) used in `savMatchedContentList` prior to exporting Data Records that use them.
+
+* **Collector Processing:** Collectors MUST be capable of parsing `subTemplateList` structure and understanding the context-dependent semantics of standard IEs within `savMatchedContentList`. Collectors MUST associate the sub-templates with the main template for correct interpretation.
+
+* **Performance Impact:** The variable-length nature of `savMatchedContentList` may impact export bandwidth and collector processing requirements, particularly for allowlist rules. Exporters SHOULD consider the trade-off between detailed reporting and performance.
+
+# Security Considerations
+
+There are no additional security considerations regarding allocation of these new IPFIX IEs compared to [RFC7012].
+Other security considerations described in [I-D.ietf-savnet-general-sav-capabilities] apply to this document.
+
+# IANA Considerations  
+
+This document requests IANA to create four new Information Elements under the "IPFIX Information Elements" registry [RFC7012] available at [IANA-IPFIX].  
+
+~~~
++------------+-----------------------+
+| Element ID | Name                  |  
++------------+-----------------------+  
+| TBD1       | savRuleType           |
+| TBD2       | savTargetType         |  
+| TBD3       | savMatchedContentList | 
+| TBD4       | savPolicyAction       | 
++------------+-----------------------+
+~~~
+
+## savRuleType  
+
+- **ElementID**: TBD1
+- **Name**: savRuleType  
+- **Abstract Data Type**: unsigned8  
+- **Data Type Semantics**: identifier  
+- **Description**: Identifies the validation rule type triggered during SAV enforcement.  
+- **Reference**: This document, [savRuleType](#subsec-IEs-savRuleType)  
+
+## savTargetType  
+
+- **ElementID**: TBD2  
+- **Name**: savTargetType  
+- **Abstract Data Type**: unsigned8  
+- **Data Type Semantics**: identifier  
+- **Description**: Specifies the entity type against which validation was performed.  
+- **Reference**: This document, [savTargetType](#subsec-IEs-savTargetType)  
+
+## savMatchedContentList
+
+- **ElementID**: TBD3
+- **Name**: savMatchedContentList
+- **Abstract Data Type**: subTemplateList
+- **Data Type Semantics**: list
+- **Description**: The content of the SAV rules relevant to the validation decision.
+- **Reference**: This document, [savMatchedContentList](#subsec-IEs-savMatchedContentList)
+
+## savPolicyAction
+
+- **ElementID**: TBD4
+- **Name**: savPolicyAction  
+- **Abstract Data Type**: unsigned8  
+- **Data Type Semantics**: identifier  
+- **Description**: Action applied to packets identified as spoofed.  
+- **Reference**: This document, [savPolicyAction](#subsec-IEs-savPolicyAction)
+
+Additionally, IANA is requested to create new subregistries under the IPFIX Information Elements registries. The subregistries contain values for the `savRuleType`, `savTargetType` and `savPolicyAction`Information Elements. The allocation policy is Expert Review [RFC8126]. Experts should consult the SAVNET architecture [I-D.ietf-savnet-general-sav-capabilities] to ensure new values are consistent with SAV validation concepts and operational models.
+
+## IPFIX savRuleType (TBD1) Subregistry
+
+- **Reference**: [I-D.ietf-savnet-general-sav-capabilities], Section 2 (Validation Modes)
+- **Allocation Policy**: Expert Review [RFC8126]
+- **Expert Guidance**: Experts should ensure that new values are consistent with the SAV architecture concepts defined in [I-D.ietf-savnet-general-sav-capabilities], particularly the validation modes and rule types (allowlist or blocklist).
+
+Initial values:
+
+~~~
++-------+-------------+----------------------------------------------------+
+| Value |    Name     |                    Description                     |
++-------+-------------+----------------------------------------------------+
+|   0   |  allowlist  |   The packet was validated against an allowlist    |
+|   1   |  blocklist  |   The packet was validated against an blocklist    |
++-------+-------------+----------------------------------------------------+
+~~~
+
+## IPFIX savTargetType (TBD2) Subregistry
+
+- **Reference**: [I-D.ietf-savnet-general-sav-capabilities], Section 2 (Validation Modes)
+- **Allocation Policy**: Expert Review [RFC8126]
+- **Expert Guidance**: Experts should consult [I-D.ietf-savnet-general-sav-capabilities] to ensure new values align with the defined target types (interface-based or prefix-based).
+
+Initial values:
+
+~~~
++-------+-----------------+----------------------------------------+
+| Value |       Name      |              Description               |
++-------+-----------------+----------------------------------------+
+|   0   | interface-based |   The rule is indexed by an interface  |
+|   1   |   prefix-based  |   The rule is indexed by a prefix      |
++-------+-----------------+----------------------------------------+
+~~~
+
+## IPFIX savPolicyAction (TBD4) Subregistry
+
+- **Reference**: [I-D.ietf-savnet-general-sav-capabilities], Section 4 (Traffic Handling Policies)
+- **Allocation Policy**: Expert Review [RFC8126]
+- **Expert Guidance**: Experts should ensure that new actions are consistent with the SAV traffic handling policies defined in [I-D.ietf-savnet-general-sav-capabilities].
+
+Initial values:
+
+~~~
++-------+-------------+----------------------------------------------------+
+| Value |     Name    |                     Description                    |
++-------+-------------+----------------------------------------------------+
+|   0   |    permit   | The packet was allowed to proceed (monitoring only)|
+|   1   |    discard  | Packet was discarded or dropped                    |
+|   2   |  rate-limit | Traffic was subjected to rate limiting             |
+|   3   |   redirect  | Packet was redirected to alternative destination   |
+| 4-255 |  unassigned | Reserved for future assignment                     |
++-------+-------------+----------------------------------------------------+
+~~~
+
+--- back
+
+# IPFIX Encoding Examples
+
+This appendix provides encoding examples for the SAV-specific IPFIX Information Elements defined in this document.
+
+## Template Record and Data Record with Sub-Template List
+
+This example demonstrates the encoding for two observed SAV enforcement events representing different validation scenarios and address families as shown in Table 1.
+
+~~~
++-------+----------------+-----------+-----------+-------------+---------------+
+| Event | Source Address | Interface | Rule Type | Target Type | Policy Action |
++-------+----------------+-----------+-----------+-------------+---------------+
+|   1   |  192.0.2.100   |   5001    | Allowlist | Interface   |  Rate-limit   |
+|   2   |  2001:db8::1   |   5001    | Blocklist |  Prefix     |  Discard      |
++-------+----------------+-----------+-----------+-------------+---------------+
+~~~
+
+Table 1: Two Observed SAV Validation Events
+
+The first event represents an IPv4 allowlist non-match event where a packet from source 192.0.2.100 arriving on interface 5001 failed to match any source prefixes configured in the interface-based allowlist.
+The second event represents an IPv6 blocklist match event where a packet from source 2001:db8::1 was received on interface 5001, which matched a prefix-based blocklist rule.
+
+### Sub-Template Definitions
+
+The following sub-templates are defined for use within the `savMatchedContentList` element to encode different types of SAV rule mappings based on address family and validation target type. The `savMatchedContentList` element is encoded as a `subTemplateList` according to [RFC6313].
+
+The template IDs used in these examples are exemplary and chosen arbitrarily. In actual implementations, exporters MUST assign unique template IDs within the IPFIX session for these sub-templates.
+
+* **Sub-Template 901: IPv4 Interface-to-Prefix Mapping**
+
+This sub-template is used when `savTargetType=0`(interface-based validation mode) for IPv4 traffic. It contains the mapping from an interface to source IPv4 prefixes as defined in the SAV rule configuration. It can be used for both blocklist and allowlist.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 2           |          Length = 20          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Template ID = 901       |        Field Count = 3        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   ingressInterface = 10     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   sourceIPv4Prefix = 44     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0| sourceIPv4PrefixLength = 9  |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
+
+* **Sub-Template 902: IPv6 Interface-to-Prefix Mapping**
+This sub-template is the IPv6 equivalent of Sub-Template 901, used for interface-based validation with IPv6 traffic.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 2           |          Length = 20          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Template ID = 902       |        Field Count = 3        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   ingressInterface = 10     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   sourceIPv6Prefix = 170    |        Field Length = 16      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0| sourceIPv6PrefixLength = 29 |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
+
+* **Sub-Template 903: IPv4 Prefix-to-Interface Mapping**
+
+This sub-template is used when `savTargetType=1`(prefix-based validation mode) for IPv4 traffic. It contains the mapping from a source IPv4 prefixes to interface as defined in the SAV rule configuration. It can be used for both blocklist and allowlist.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 2           |          Length = 20          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Template ID = 903       |        Field Count = 3        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   sourceIPv4Prefix = 44     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0| sourceIPv4PrefixLength = 9  |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   ingressInterface = 10     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
+
+* **Sub-Template 904: IPv6 Prefix-to-Interface Mapping**
+
+This sub-template is the IPv6 equivalent of Sub-Template 903, used for prefix-based validation with IPv6 traffic.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 2           |          Length = 20          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Template ID = 904       |        Field Count = 3        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   sourceIPv6Prefix = 170    |        Field Length = 16      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0| sourceIPv6PrefixLength = 29 |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   ingressInterface = 10     |        Field Length = 4       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
+
+### Main Template Record
+
+The main Template Record (ID 400) contains fields for exporting detailed SAV enforcement information including the validation outcome and the specific rule content that triggered the action. The template incorporates the `savMatchedContentList` element as a variable-length `subTemplateList` to carry the relevant SAV rule contents using the appropriate sub-templates defined above.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 2           |          Length = 28          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|        Template ID = 400      |        Field Count = 5        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|  observationTimeMicrosec=324|        Field Length = 8       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|      savRuleType = TBD1     |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|     savTargetType = TBD2    |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0| savMatchedContentList=TBD3  |      Field Length = 0xFFFF    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|0|   savPolicyAction = TBD4    |        Field Length = 1       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
+
+### Data Set Example
+
+The following Data Set contains two Data Records that represent the two SAV validation scenarios in Table 1. The `savMatchedContentList` element for the first record encodes the complete set of allowed prefixes using Sub-Template 901 with the `allOf` semantic (0x03). The allowlist includes three sav rules. The `savMatchedContentList` element for the second record encodes the specific blocked interface using Sub-Template 904 with the `exactlyOneOf` semantic (0x01), indicating the packet matched this particular rule.
+
+~~~
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Set ID = 400         |          Length = 88          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              observationTimeMicrosec =                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                      0x5D2F0A0000000000                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| savRuleType=0 | savTargetType=0|     255     |   List Length  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     = 33      |semantic=(allOf)|      Template ID = 901       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                ingressInterface[0] = 5001                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              sourceIPv4Prefix[0] = 198.51.100.0               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|sourceIPv4PrfLen[0]=24|         ingressInterface[1] =          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      5001     |         sourceIPv4Prefix[1] =                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  203.0.113.0  | sourceIPv4PrfLen[1]=24|  ingressInterface[2] =|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               5001            |       sourceIPv4Prefix[2] =   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         192.10.2.0   |sourceIPv4PrfLen[2]=24|savPolicyAction=2|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              observationTimeMicrosec =                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                      0x5D2F0A0000000001                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| savRuleType=1 | savTargetType=1|     255     |   List Length  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     = 27      |semantic=exactlyOneOf|   Template ID = 904     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     sourceIPv6Prefix[0]                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|sourceIPv6PrfLen[0]=32||     ingressInterface[0] =             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       5001    |savPolicyAction=1|            padding          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+~~~
